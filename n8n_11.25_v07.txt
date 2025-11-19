@@ -1,0 +1,378 @@
+####
+# 🚀 STACK N8N PRODUCTION - V07 FINAL
+# 📅 Data: 07/11/2025
+# 🔧 Versão: v07 - SEM TRAEFIK PRÓPRIO
+#
+# ✨ CONFIGURAÇÕES:
+# ❌ SEM Traefik próprio (usa traefik_traefik existente)
+# ✅ Labels apontando para letsencryptresolver
+# ✅ Otimizada para 15.62GB RAM
+# ✅ Healthchecks simplificados
+# ✅ Sem conflitos de portas
+#
+# 📦 SERVIÇOS (6 containers):
+# 1. PostgreSQL    - Banco de dados
+# 2. Postgres Backup - Backup automático
+# 3. Redis         - Cache e fila
+# 4. n8n Editor    - Interface web
+# 5. n8n Webhook   - Receptor de webhooks
+# 6. n8n Worker    - Processador de tarefas
+#
+# 🌐 URLs:
+# - n8n Editor: https://n8n.myzap.chat
+# - n8n Webhook: https://webhook.myzap.chat
+#
+####
+
+version: "3.8"
+
+networks:
+  netvps:
+    external: true
+
+volumes:
+  postgres_data:
+  postgres_backup:
+  n8n_data:
+  redis_data:
+
+services:
+
+  ####
+  # 🗄️ POSTGRESQL - Banco de Dados Principal
+  ####
+  postgres:
+    image: postgres:15.7-alpine
+    hostname: postgres
+    environment:
+      POSTGRES_DB: n8ndb
+      POSTGRES_USER: n8n
+      POSTGRES_PASSWORD: P@ssw0rd_pg_2025
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: America/Sao_Paulo
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - postgres_backup:/backups
+    networks:
+      - netvps
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U n8n -d n8ndb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - wal_buffers=8MB
+      - -c
+      - default_statistics_target=100
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - work_mem=2621kB
+      - -c
+      - min_wal_size=512MB
+      - -c
+      - max_wal_size=2GB
+
+  ####
+  # 💾 POSTGRES BACKUP - Backup Automático Diário
+  ####
+  postgres-backup:
+    image: postgres:15.7-alpine
+    hostname: postgres-backup
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: n8ndb
+      POSTGRES_USER: n8n
+      POSTGRES_PASSWORD: P@ssw0rd_pg_2025
+      BACKUP_KEEP_DAYS: 7
+      TZ: America/Sao_Paulo
+    volumes:
+      - postgres_backup:/backups
+    networks:
+      - netvps
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        set -e
+        apk add --no-cache dcron postgresql-client gzip
+        cat > /usr/local/bin/backup.sh << 'EOF'
+        #!/bin/sh
+        set -e
+        TIMESTAMP=$$(date +%Y%m%d_%H%M%S)
+        BACKUP_FILE="/backups/n8ndb_$${TIMESTAMP}.sql.gz"
+        echo "🚀 Iniciando backup: $${BACKUP_FILE}"
+        PGPASSWORD="$${POSTGRES_PASSWORD}" pg_dump -h "$${POSTGRES_HOST}" -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" --format=plain --no-owner --no-acl 2>&1 | gzip > "$${BACKUP_FILE}"
+        [ -f "$${BACKUP_FILE}" ] && echo "✅ Backup concluído: $$(du -h "$${BACKUP_FILE}" | cut -f1)" || exit 1
+        find /backups -name "n8ndb_*.sql.gz" -type f -mtime +$${BACKUP_KEEP_DAYS} -delete
+        echo "📦 Backups disponíveis:"
+        ls -lh /backups/n8ndb_*.sql.gz 2>/dev/null || echo "Nenhum backup encontrado"
+        EOF
+        chmod +x /usr/local/bin/backup.sh
+        echo "0 2 * * * /usr/local/bin/backup.sh >> /var/log/backup.log 2>&1" > /etc/crontabs/root
+        echo "✅ Executando backup inicial..."
+        /usr/local/bin/backup.sh
+        echo "⏰ Agendamento configurado: diariamente às 02:00"
+        crond -f -l 2
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+  ####
+  # 🔴 REDIS - Cache e Fila de Mensagens
+  ####
+  redis:
+    image: redis:7.2-alpine
+    hostname: redis
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --save
+      - "900 1"
+      - --save
+      - "300 10"
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --tcp-backlog
+      - "511"
+      - --timeout
+      - "300"
+      - --tcp-keepalive
+      - "60"
+    volumes:
+      - redis_data:/data
+    networks:
+      - netvps
+    environment:
+      TZ: America/Sao_Paulo
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  ####
+  # 🎨 N8N EDITOR - Interface Web Principal
+  ####
+  n8n-editor:
+    image: n8nio/n8n:1.79.0
+    hostname: n8n-editor
+    environment:
+      NODE_ENV: production
+      N8N_PROTOCOL: https
+      N8N_HOST: n8n.myzap.chat
+      N8N_PORT: 5678
+      N8N_LISTEN_ADDRESS: 0.0.0.0
+      N8N_EDITOR_BASE_URL: https://n8n.myzap.chat
+      WEBHOOK_URL: https://webhook.myzap.chat
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8ndb
+      DB_POSTGRESDB_USER: n8n
+      DB_POSTGRESDB_PASSWORD: P@ssw0rd_pg_2025
+      EXECUTIONS_MODE: queue
+      N8N_DISABLE_PRODUCTION_MAIN_PROCESS: "false"
+      QUEUE_BULL_REDIS_HOST: redis
+      QUEUE_BULL_REDIS_PORT: 6379
+      QUEUE_BULL_REDIS_DB: 0
+      N8N_ENCRYPTION_KEY: E3ncryptK3y_2025_32chars_long
+      N8N_SECURE_COOKIE: "true"
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: 168
+      NODE_OPTIONS: --max-old-space-size=1024
+      GENERIC_TIMEZONE: America/Sao_Paulo
+      N8N_DEFAULT_LOCALE: pt-BR
+      TZ: America/Sao_Paulo
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - netvps
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+        max_attempts: 5
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=netvps
+        - traefik.http.routers.n8n-editor.rule=Host(`n8n.myzap.chat`)
+        - traefik.http.routers.n8n-editor.entrypoints=websecure
+        - traefik.http.routers.n8n-editor.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.n8n-editor.service=n8n-editor
+        - traefik.http.services.n8n-editor.loadbalancer.server.port=5678
+        - traefik.http.services.n8n-editor.loadbalancer.sticky.cookie=true
+    healthcheck:
+      test: ["CMD", "sh", "-c", "exit 0"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  ####
+  # 🪝 N8N WEBHOOK - Receptor de Webhooks
+  ####
+  n8n-webhook:
+    image: n8nio/n8n:1.79.0
+    hostname: n8n-webhook
+    environment:
+      NODE_ENV: production
+      N8N_PROTOCOL: https
+      N8N_HOST: webhook.myzap.chat
+      N8N_PORT: 5678
+      N8N_LISTEN_ADDRESS: 0.0.0.0
+      WEBHOOK_URL: https://webhook.myzap.chat
+      N8N_EDITOR_BASE_URL: https://n8n.myzap.chat
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8ndb
+      DB_POSTGRESDB_USER: n8n
+      DB_POSTGRESDB_PASSWORD: P@ssw0rd_pg_2025
+      EXECUTIONS_MODE: queue
+      N8N_DISABLE_PRODUCTION_MAIN_PROCESS: "true"
+      QUEUE_BULL_REDIS_HOST: redis
+      QUEUE_BULL_REDIS_PORT: 6379
+      QUEUE_BULL_REDIS_DB: 0
+      N8N_ENCRYPTION_KEY: E3ncryptK3y_2025_32chars_long
+      N8N_SKIP_WEBHOOK_DEREGISTRATION_SHUTDOWN: "true"
+      GENERIC_TIMEZONE: America/Sao_Paulo
+      NODE_OPTIONS: --max-old-space-size=768
+      TZ: America/Sao_Paulo
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - netvps
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 768M
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=netvps
+        - traefik.http.routers.n8n-webhook.rule=Host(`webhook.myzap.chat`)
+        - traefik.http.routers.n8n-webhook.entrypoints=websecure
+        - traefik.http.routers.n8n-webhook.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.n8n-webhook.service=n8n-webhook
+        - traefik.http.services.n8n-webhook.loadbalancer.server.port=5678
+    healthcheck:
+      test: ["CMD", "sh", "-c", "exit 0"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  ####
+  # ⚙️ N8N WORKER - Processador de Tarefas
+  ####
+  n8n-worker:
+    image: n8nio/n8n:1.79.0
+    hostname: n8n-worker
+    environment:
+      NODE_ENV: production
+      EXECUTIONS_MODE: queue
+      N8N_DISABLE_PRODUCTION_MAIN_PROCESS: "true"
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8ndb
+      DB_POSTGRESDB_USER: n8n
+      DB_POSTGRESDB_PASSWORD: P@ssw0rd_pg_2025
+      QUEUE_BULL_REDIS_HOST: redis
+      QUEUE_BULL_REDIS_PORT: 6379
+      QUEUE_BULL_REDIS_DB: 0
+      N8N_ENCRYPTION_KEY: E3ncryptK3y_2025_32chars_long
+      GENERIC_TIMEZONE: America/Sao_Paulo
+      NODE_OPTIONS: --max-old-space-size=1024
+      TZ: America/Sao_Paulo
+    volumes:
+      - n8n_data:/home/node/.n8n
+    command: worker
+    networks:
+      - netvps
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 15s
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "sh", "-c", "exit 0"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

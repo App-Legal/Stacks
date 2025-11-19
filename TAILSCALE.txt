@@ -1,0 +1,42 @@
+TAILSCALE
+
+selecione as VPS-21 e VPS-2, execute o comando (irá instalar o tailscale)
+-->  curl -fsSL https://tailscale.com/install.sh | sh
+
+Ativar o tailscale nas vps
+--> sudo tailscale up
+
+Para cada vps será gerada ums URL de acesso, cadastre as informações
+--> ambas as vps estão logadas na rede tailscale
+
+
+Após execute --> tailscale status
+irá mostrar os ips das vps, ex.:
+
+root@vps1:~# tailscale status
+100.103.148.101  vps1  App-Legal@  linux  -
+100.122.196.23   vps2  App-Legal@  linux  -
+root@vps1:~#
+
+🔵 VPS.Dados
+IP público: 31.97.90.236
+IP Tailscale: 100.103.148.101
+Função: PostgreSQL, Redis, backups
+
+🟢 VPS.NNqeue (principal)
+IP público: 72.60.5.163
+IP Tailscale: 100.122.196.23
+Função: n8n, Traefik, workers, webhooks
+
+
+Conecte-se pelo ssh em uma das vps, execute o comando ping na outra, ex.:
+
+root@vps1:~# ping -c 4 100.122.196.23
+PING 100.122.196.23 (100.122.196.23) 56(84) bytes of data.
+64 bytes from 100.122.196.23: icmp_seq=1 ttl=64 time=11.6 ms
+64 bytes from 100.122.196.23: icmp_seq=2 ttl=64 time=2.64 ms
+64 bytes from 100.122.196.23: icmp_seq=3 ttl=64 time=1.55 ms
+64 bytes from 100.122.196.23: icmp_seq=4 ttl=64 time=1.39 ms
+
+--- 100.122.196.23 ping statistics ---
+4 packets transmitted, 4 received, 0% packet loss, time 3003ms

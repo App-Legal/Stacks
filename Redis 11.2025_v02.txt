@@ -1,0 +1,297 @@
+version: "3.8"
+
+# ============================================================
+# STACK DOCKER SWARM - REDIS + REDIS COMMANDER + BACKUP
+# ============================================================
+# REDE: netoverlay (externa, attachable)
+# URL: https://redis.myzap.chat
+# ============================================================
+
+networks:
+  netoverlay:
+    external: true
+    name: netoverlay
+
+volumes:
+  redis_data:
+    driver: local
+  redis_backup_data:
+    driver: local
+
+services:
+
+  # ============================================================
+  # ==== BLOCO: REDIS ====
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    hostname: redis
+
+    command:
+      - "redis-server"
+      - "--appendonly"
+      - "yes"
+      - "--appendfsync"
+      - "everysec"
+      - "--save"
+      - "60 1000"
+      - "--save"
+      - "300 100"
+      - "--save"
+      - "900 1"
+      - "--loglevel"
+      - "warning"
+      - "--maxmemory"
+      - "1gb"
+      - "--maxmemory-policy"
+      - "allkeys-lru"
+      - "--protected-mode"
+      - "yes"
+      - "--requirepass"
+      - "redis+.K@m@L.0821"
+      - "--tcp-backlog"
+      - "511"
+      - "--timeout"
+      - "300"
+      - "--tcp-keepalive"
+      - "300"
+      - "--databases"
+      - "16"
+      - "--slowlog-log-slower-than"
+      - "10000"
+      - "--slowlog-max-len"
+      - "128"
+
+    environment:
+      REDIS_PASSWORD: redis+.K@m@L.0821
+      TZ: America/Sao_Paulo
+
+    volumes:
+      - redis_data:/data
+
+    networks:
+      - netoverlay
+
+    # Expor Redis no loopback do host (127.0.0.1), porta 6379
+    # Isso permite acesso via Tailscale sem abrir a porta no IP público.
+    ports:
+      - "127.0.0.1:6379:6379"
+
+    deploy:
+      mode: replicated
+      replicas: 1
+
+      placement:
+        constraints:
+          - node.role == manager
+
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+        window: 120s
+
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1024M
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        order: stop-first
+
+      labels:
+        - "traefik.enable=false"
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "redis-cli -a \"redis+.K@m@L.0821\" ping | grep PONG || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================================
+  # ==== BLOCO: REDIS COMMANDER ====
+  # Interface web - porta interna 8081
+  # Exposto via Traefik em: https://redis.myzap.chat
+  # ============================================================
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    hostname: redis-commander
+
+    environment:
+      REDIS_HOSTS: "local:redis:6379:0:redis+.K@m@L.0821"
+      HTTP_USER: admin
+      HTTP_PASSWORD: redis+.K@m@L.0821
+      PORT: 8081
+      TRUST_PROXY: "true"
+      TZ: America/Sao_Paulo
+
+    networks:
+      - netoverlay
+
+    deploy:
+      mode: replicated
+      replicas: 1
+
+      placement:
+        constraints:
+          - node.role == manager
+
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+
+      labels:
+        # Ativa Traefik
+        - "traefik.enable=true"
+
+        # Força uso da rede netoverlay
+        - "traefik.docker.network=netoverlay"
+
+        # Define a porta do container (obrigatório em Swarm mode)
+        - "traefik.http.services.redis-commander.loadbalancer.server.port=8081"
+
+        # Router HTTPS
+        - "traefik.http.routers.redis-commander.rule=Host(`redis.myzap.chat`)"
+        - "traefik.http.routers.redis-commander.entrypoints=websecure"
+        - "traefik.http.routers.redis-commander.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.redis-commander.service=redis-commander"
+
+        # Redirect HTTP -> HTTPS
+        - "traefik.http.routers.redis-commander-http.rule=Host(`redis.myzap.chat`)"
+        - "traefik.http.routers.redis-commander-http.entrypoints=web"
+        - "traefik.http.routers.redis-commander-http.middlewares=redirect-to-https"
+        - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+
+    # HEALTHCHECK removido (a imagem não tem wget/curl)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ============================================================
+  # ==== BLOCO: BACKUP REDIS ====
+  # ============================================================
+  redis-backup:
+    image: redis:7-alpine
+    hostname: redis-backup
+
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        set -e
+        apk add --no-cache bash dcron findutils tar gzip > /dev/null 2>&1
+        mkdir -p /data/bkp
+
+        cat > /usr/local/bin/redis-backup.sh << 'EOFREDISBACKUP'
+        #!/bin/bash
+        set -e
+        BACKUP_DIR="/data/bkp"
+        DATE=$$(date +%Y%m%d)
+        TIMESTAMP=$$(date +%Y%m%d_%H%M%S)
+        RETENTION_DAYS=7
+
+        mkdir -p "$${BACKUP_DIR}"
+
+        echo "[$$(date '+%Y-%m-%d %H:%M:%S')] Iniciando backup Redis..."
+
+        if redis-cli -h "$${REDIS_HOST}" -a "$${REDIS_PASSWORD}" --no-auth-warning PING > /dev/null 2>&1; then
+          redis-cli -h "$${REDIS_HOST}" -a "$${REDIS_PASSWORD}" --no-auth-warning BGSAVE > /dev/null 2>&1 || true
+          sleep 5
+          redis-cli -h "$${REDIS_HOST}" -a "$${REDIS_PASSWORD}" --no-auth-warning --rdb "$${BACKUP_DIR}/redis_$${TIMESTAMP}.rdb" > /dev/null 2>&1 || true
+
+          if [ -f "$${BACKUP_DIR}/redis_$${TIMESTAMP}.rdb" ]; then
+            tar -czf "$${BACKUP_DIR}/redis_backup_$${DATE}.tar.gz" -C "$${BACKUP_DIR}" "redis_$${TIMESTAMP}.rdb"
+            rm -f "$${BACKUP_DIR}/redis_$${TIMESTAMP}.rdb"
+          else
+            echo "ERRO: snapshot RDB não gerado"
+          fi
+        else
+          echo "ERRO: não foi possível conectar ao Redis para backup"
+        fi
+
+        find "$${BACKUP_DIR}" -name "redis_backup_*.tar.gz" -type f -mtime +$${RETENTION_DAYS} -delete 2>/dev/null || true
+
+        echo "[$$(date '+%Y-%m-%d %H:%M:%S')] Backup Redis finalizado."
+        EOFREDISBACKUP
+
+        chmod +x /usr/local/bin/redis-backup.sh
+        echo "0 3 * * * /usr/local/bin/redis-backup.sh >> /var/log/redis-backup.log 2>&1" > /etc/crontabs/root
+
+        /usr/local/bin/redis-backup.sh || true
+        crond -f -l 2
+
+    environment:
+      TZ: America/Sao_Paulo
+      REDIS_HOST: redis
+      REDIS_PASSWORD: redis+.K@m@L.0821
+
+    volumes:
+      - redis_backup_data:/data/bkp
+
+    networks:
+      - netoverlay
+
+    deploy:
+      mode: replicated
+      replicas: 1
+
+      placement:
+        constraints:
+          - node.role == manager
+
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+
+      labels:
+        - "traefik.enable=false"
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

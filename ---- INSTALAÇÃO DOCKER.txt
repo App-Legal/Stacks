@@ -1,0 +1,102 @@
+
+----> INSTALAÇÃO VPS 1
+
+Host --> https://www.hostinger.com/
+KVM 2 | 24 meses | expira 25/07/2027
+
+Dominio usado --> myzap.chat
+SO - Ubuntu 25.04
+Nome VPS --> vps1.apps
+IP --> 31.97.90.236
+User --> root
+SH/root --> vps114kRRn03Xpt@
+
+Apps Instalados
+Doker swarm | Evolution-API | Chatwoot | Postgres | Redis
+* dominio/user/Sh - portainer.myzap.chat | admin | portainer14kRRn03Xpt@
+* traefik network = netvps1)
+* email - myzap.chat@gmail.com
+
+GUITHUB
+dominio/user/Sh - myzap.chat@gmailcom | github14kRRn03Xpt@
+deploy (comando) --> docker stack deploy -c docker-stack.yml n8n_qeue_112025_v03
+
+
+TRAEFIK
+dominio/user/Sh - myzap.chat@gmailcom | traefik14kRRn03Xpt@
+
+Configurações:
+Item	Valentia
+Principal	myzap.chat
+API de Evolução	evolução.myzap.chat
+Console MinIO	minio.myza
+API MinIO S3	s3minio.myzap.chat
+E-mail	myzap.chat@gmail.com
+Senha	#P@$$w0rd#
+Chave de API	oAgV8IsIk4sM8SxgiYmLKdeRLuL
+Rede Externa	netvps
+Traefik	traefik_traefik
+Resolutor de Certificados	letsencrypt
+Registro	Imagens oficiais + construção
+CPU	4
+BATER	16 GB
+Discoteca	SSD de 200 GB
+Backup	Automático de qualidade + Min
+Retenção	7 dias
+Horário Backup	04:00
+CI/CD	Ações do GitHub
+
+
+
+CREDENCIAIS PADRÃO
+⚠️ ALTERE EM PRODUÇÃO!
+
+se	Usuário	Senha
+PostgreSQL	n8n	P@ssw0rd_pg_2025
+Grafana	admin	Gr@f@n@_2025
+Traefik	admin	Tr@3f1k_2025
+MinIO	admin	M1n10_2025
+
+
+DOMÍNIOS NECESSÁRIO
+Aponte para o IP do servidor:
+n8n.myzap.chat
+webhook.myzap.chat
+minio.myzap.chat
+s3.myzap.chat
+traefik.myzap.chat
+prometheus.myzap.chat
+grafana.myzap.chat
+
+
+
+
+----> INSTALAÇÃO VPS 2
+
+Host --> https://www.hostinger.com/
+KVM 2 | 24 meses | expira 25/07/2027
+
+Dominio usado --> myzap.online
+IP --> 72.60.5.163
+User --> root
+SH/root --> vps214kRRn03Xpt@
+SO - Ubuntu 25.04
+
+Apps Instalados
+* N8N Fila | Postgres | Redis
+* dominio/user/Sh - portainer.myzap.online | admin | portainer14kRRn03Xpt@
+* traefik network = netvps2)
+* email - myzap.chat@gmail.com
+
+
+
+#### --> atualização pacotes linux
+sudo apt update && sudo apt upgrade
+
+#### --> comando install coolify
+curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash
+
+#### --> comando install orion setup
+bash <(curl -sSL setup.oriondesign.art.br)
+
+

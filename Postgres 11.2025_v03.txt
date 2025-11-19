@@ -1,0 +1,354 @@
+version: "3.8"
+
+# ============================================================
+# STACK DOCKER SWARM - POSTGRES + PGADMIN + BACKUP
+# ============================================================
+# Objetivo:
+#   - Provisionar PostgreSQL (banco relacional)
+#   - Disponibilizar pgAdmin
+#   - Habilitar backup automático local
+#
+# REDE OVERLAY:
+#   - netoverlay (EXTERNA, attachable)
+#   - Criar antes do deploy:
+#       docker network create --driver overlay --attachable netoverlay
+#
+# Padrões:
+#   - Usuário Postgres: admin
+#   - Senha Postgres: postgres+.K@m@L.0821
+#   - DB: n8n_db
+#   - pgAdmin: admin@myzap.chat / pgadmin+.K@m@L.0821
+# ============================================================
+
+# ============================================================
+# ==== BLOCO: REDES ====
+# ============================================================
+networks:
+  netoverlay:
+    external: true
+    name: netoverlay
+
+# ============================================================
+# ==== BLOCO: VOLUMES ====
+# ============================================================
+volumes:
+  postgres_data:
+    driver: local
+
+  pgadmin_data:
+    driver: local
+
+  postgres_backup_data:
+    driver: local
+
+# ============================================================
+# ==== BLOCO: SERVIÇOS ====
+# ============================================================
+services:
+
+  # ============================================================
+  # ==== BLOCO: POSTGRES ====
+  # Banco relacional principal.
+  # ============================================================
+  postgres:
+    image: postgres:16-alpine
+    hostname: postgres
+
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: postgres+.K@m@L.0821
+      POSTGRES_DB: n8n_db
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C --data-checksums"
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      TZ: America/Sao_Paulo
+      PGTZ: America/Sao_Paulo
+
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "effective_cache_size=1536MB"
+      - "-c"
+      - "maintenance_work_mem=128MB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "wal_buffers=16MB"
+      - "-c"
+      - "default_statistics_target=100"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "min_wal_size=1GB"
+      - "-c"
+      - "max_wal_size=4GB"
+      - "-c"
+      - "max_worker_processes=4"
+      - "-c"
+      - "max_parallel_workers_per_gather=2"
+      - "-c"
+      - "max_parallel_workers=4"
+      - "-c"
+      - "max_parallel_maintenance_workers=2"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    networks:
+      - netoverlay
+
+    # >>> ALTERAÇÃO IMPORTANTE <<<
+    # Expor PostgreSQL na porta 5432 do host.
+    ports:
+      - "5432:5432"
+    # ============================
+
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        order: stop-first
+
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+      labels:
+        - "traefik.enable=false"
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U admin -d n8n_db || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================================
+  # ==== BLOCO: PGADMIN ====
+  # Interface de administração do Postgres.
+  # Subdomínio sugerido: postgres.myzap.chat
+  # ============================================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    hostname: pgadmin
+
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@myzap.chat
+      PGADMIN_DEFAULT_PASSWORD: pgadmin+.K@m@L.0821
+      PGADMIN_LISTEN_PORT: 80
+
+      PGADMIN_CONFIG_SERVER_MODE: "True"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: "True"
+      PGADMIN_CONFIG_CONSOLE_LOG_LEVEL: 30
+
+      PGADMIN_CONFIG_MAIL_SERVER: "'smtp.gmail.com'"
+      PGADMIN_CONFIG_MAIL_PORT: 587
+      PGADMIN_CONFIG_MAIL_USE_SSL: "False"
+      PGADMIN_CONFIG_MAIL_USE_TLS: "True"
+      PGADMIN_CONFIG_MAIL_USERNAME: "'myzap.chat'"
+      PGADMIN_CONFIG_MAIL_PASSWORD: "'#$P1ncold@l#13'"
+      PGADMIN_CONFIG_MAIL_DEFAULT_SENDER: "'myzap.chat'"
+
+      TZ: America/Sao_Paulo
+
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+    networks:
+      - netoverlay
+
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=netoverlay"
+        - "traefik.http.routers.pgadmin.rule=Host(`postgres.myzap.chat`)"
+        - "traefik.http.routers.pgadmin.entrypoints=websecure"
+        - "traefik.http.routers.pgadmin.tls=true"
+        - "traefik.http.routers.pgadmin.tls.certresolver=letsencrypt"
+        - "traefik.http.services.pgadmin.loadbalancer.server.port=80"
+        - "traefik.http.routers.pgadmin.middlewares=pgadmin-headers"
+        - "traefik.http.middlewares.pgadmin-headers.headers.sslredirect=true"
+        - "traefik.http.middlewares.pgadmin-headers.headers.stsSeconds=31536000"
+        - "traefik.http.middlewares.pgadmin-headers.headers.stsIncludeSubdomains=true"
+        - "traefik.http.middlewares.pgadmin-headers.headers.stsPreload=true"
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:80/misc/ping",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ============================================================
+  # ==== BLOCO: BACKUP POSTGRES ====
+  # Backup lógico diário às 03:00.
+  # ============================================================
+  postgres-backup:
+    image: postgres:16-alpine
+    hostname: postgres-backup
+
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        set -e
+        apk add --no-cache bash dcron findutils tar gzip > /dev/null 2>&1
+        mkdir -p /data/bkp
+
+        cat > /usr/local/bin/postgres-backup.sh << 'EOFPG'
+        #!/bin/bash
+        set -e
+        BACKUP_DIR="/data/bkp"
+        DATE=$$(date +%Y%m%d)
+        TIMESTAMP=$$(date +%Y%m%d_%H%M%S)
+        RETENTION_DAYS=7
+
+        mkdir -p "$${BACKUP_DIR}"
+
+        echo "[$$(date '+%Y-%m-%d %H:%M:%S')] Iniciando backup PostgreSQL..."
+
+        if PGPASSWORD="$${POSTGRES_PASSWORD}" pg_isready -h "$${POSTGRES_HOST}" -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" > /dev/null 2>&1; then
+          PGPASSWORD="$${POSTGRES_PASSWORD}" pg_dump \
+            -h "$${POSTGRES_HOST}" \
+            -U "$${POSTGRES_USER}" \
+            -d "$${POSTGRES_DB}" \
+            -F c -b -v \
+            -f "$${BACKUP_DIR}/postgres_$${TIMESTAMP}.dump" 2>&1 | grep -v "^pg_dump:" || true
+
+          if [ -f "$${BACKUP_DIR}/postgres_$${TIMESTAMP}.dump" ]; then
+            tar -czf "$${BACKUP_DIR}/postgres_backup_$${DATE}.tar.gz" -C "$${BACKUP_DIR}" "postgres_$${TIMESTAMP}.dump"
+            rm -f "$${BACKUP_DIR}/postgres_$${TIMESTAMP}.dump"
+          else
+            echo "ERRO: arquivo de dump PostgreSQL não gerado"
+          fi
+        else
+          echo "ERRO: conexão com PostgreSQL falhou"
+        fi
+
+        find "$${BACKUP_DIR}" -name "postgres_backup_*.tar.gz" -type f -mtime +$${RETENTION_DAYS} -delete 2>/dev/null || true
+
+        echo "[$$(date '+%Y-%m-%d %H:%M:%S')] Backup PostgreSQL finalizado."
+        EOFPG
+
+        chmod +x /usr/local/bin/postgres-backup.sh
+        echo "0 3 * * * /usr/local/bin/postgres-backup.sh >> /var/log/postgres-backup.log 2>&1" > /etc/crontabs/root
+
+        /usr/local/bin/postgres-backup.sh || true
+        crond -f -l 2
+
+    environment:
+      TZ: America/Sao_Paulo
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: postgres+.K@m@L.0821
+      POSTGRES_DB: n8n_db
+
+    volumes:
+      - postgres_backup_data:/data/bkp
+
+    networks:
+      - netoverlay
+
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+
+      labels:
+        - "traefik.enable=false"
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

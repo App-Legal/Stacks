@@ -1,0 +1,67 @@
+version: "3.9"
+
+# ===========================================
+# BLOCO: POSTGRES - Banco de Dados (uso interno)
+# ===========================================
+
+services:
+  postgres-n8n:
+    image: postgres:15-alpine
+    container_name: postgres-n8n
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c max_connections=100
+      -c wal_level=replica
+      -c fsync=on
+      -c full_page_writes=on
+      -c log_statement=none
+    environment:
+      POSTGRES_DB: n8n
+      POSTGRES_USER: n8n
+      POSTGRES_PASSWORD: n8n_pass_!Secure2025
+    networks:
+      - netvps1
+    volumes:
+      - postgres_n8n_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U n8n -d n8n"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 1G
+        reservations:
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+# ===========================================
+# BLOCO: REDE E VOLUMES
+# ===========================================
+
+networks:
+  netvps1:
+    external: true
+
+volumes:
+  postgres_n8n_data:
+    driver: local

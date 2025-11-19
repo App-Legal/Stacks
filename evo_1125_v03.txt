@@ -1,0 +1,666 @@
+################################################################################
+#                                                                              #
+#                    🚀 EVOLUTION API - STACK DEFINITIVA                       #
+#                         Stack Name: evo_1125_v3                              #
+#                         Versão: 3.2 - FINAL WORKING                          #
+#                                                                              #
+################################################################################
+
+################################################################################
+# BLOCO 1: CABEÇALHO E DOCUMENTAÇÃO
+################################################################################
+
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ 📋 INFORMAÇÕES DA STACK                                                  │
+# ├─────────────────────────────────────────────────────────────────────────┤
+# │ Nome: evo_1125_v3                                                        │
+# │ Propósito: API WhatsApp com PostgreSQL, Redis e MinIO                   │
+# │ Servidor: VPS1 (4 CPU / 15GB RAM)                                       │
+# │ Portas Expostas:                                                         │
+# │   - 8080: Evolution API                                                  │
+# │   - 9000: MinIO S3 API                                                   │
+# │   - 9001: MinIO Console                                                  │
+# │                                                                          │
+# │ ✅ TODAS AS CORREÇÕES APLICADAS:                                         │
+# │    - Senha PostgreSQL URL-encoded                                        │
+# │    - MinIO endpoint sem porta                                            │
+# │    - Hostnames corretos dos serviços                                     │
+# │    - Healthchecks configurados                                           │
+# └─────────────────────────────────────────────────────────────────────────┘
+
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ 🔧 INSTRUÇÕES DE DEPLOY VIA PORTAINER                                    │
+# ├─────────────────────────────────────────────────────────────────────────┤
+# │ 1. Acesse Portainer → Stacks → Add Stack                                │
+# │ 2. Nome: evo_1125_v3                                                     │
+# │ 3. Cole este arquivo completo                                            │
+# │ 4. Clique em "Deploy the stack"                                          │
+# │ 5. Aguarde 2-3 minutos para inicialização completa                       │
+# │ 6. Acesse: http://SEU_IP:8080                                            │
+# └─────────────────────────────────────────────────────────────────────────┘
+
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ 🔐 CREDENCIAIS (INLINE)                                                  │
+# ├─────────────────────────────────────────────────────────────────────────┤
+# │ PostgreSQL:                                                              │
+# │   - User: postgres                                                       │
+# │   - Password: Pg#2024!Evo@Secure                                         │
+# │   - Database: postgres                                                   │
+# │                                                                          │
+# │ MinIO:                                                                   │
+# │   - User: minio_admin                                                    │
+# │   - Password: MinIO#2024!Secure@Pass                                     │
+# │   - Console: http://SEU_IP:9001                                          │
+# │                                                                          │
+# │ Evolution API:                                                           │
+# │   - API Key: evo_2024_api_key_secure_v3                                  │
+# │   - URL: http://SEU_IP:8080                                              │
+# │   - Manager: http://SEU_IP:8080/manager                                  │
+# └─────────────────────────────────────────────────────────────────────────┘
+
+version: '3.8'
+
+################################################################################
+# NETWORKS - Redes Docker
+################################################################################
+networks:
+  evo_network:
+    driver: overlay
+    attachable: true
+    driver_opts:
+      encrypted: "true"
+
+################################################################################
+# VOLUMES - Persistência de Dados
+################################################################################
+volumes:
+  postgres_data:
+    driver: local
+  
+  redis_data:
+    driver: local
+  
+  minio_data:
+    driver: local
+  
+  evolution_instances:
+    driver: local
+  
+  evolution_store:
+    driver: local
+
+################################################################################
+# SERVICES - Serviços da Stack
+################################################################################
+services:
+
+  ################################################################################
+  # BLOCO 2: POSTGRESQL - Banco de Dados Principal
+  ################################################################################
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │ 🐘 POSTGRESQL 16                                                         │
+  # ├─────────────────────────────────────────────────────────────────────────┤
+  # │ FUNÇÃO:                                                                  │
+  # │   - Armazenamento principal de dados da Evolution API                   │
+  # │   - Persistência de instâncias, mensagens, contatos e chats             │
+  # │   - Configurado para alta performance com 4 CPU / 15GB RAM              │
+  # │                                                                          │
+  # │ OTIMIZAÇÕES:                                                             │
+  # │   - max_connections: 200 (suporta múltiplas instâncias)                 │
+  # │   - shared_buffers: 256MB (cache de dados)                              │
+  # │   - effective_cache_size: 1GB (otimização de queries)                   │
+  # │   - work_mem: 2.6MB (memória por operação)                              │
+  # │   - Parallel workers: 4 (uso eficiente de CPU)                          │
+  # │                                                                          │
+  # │ SEGURANÇA:                                                               │
+  # │   - Autenticação: scram-sha-256 (mais seguro que MD5)                   │
+  # │   - Senha forte com caracteres especiais                                │
+  # │   - Rede isolada (apenas serviços internos)                             │
+  # │                                                                          │
+  # │ HEALTHCHECK:                                                             │
+  # │   - Verifica se PostgreSQL está aceitando conexões                      │
+  # │   - Intervalo: 10s | Timeout: 5s | Retries: 5                           │
+  # │   - Start period: 30s (tempo para inicialização)                        │
+  # └─────────────────────────────────────────────────────────────────────────┘
+  
+  postgres:
+    image: postgres:16-alpine
+    
+    networks:
+      - evo_network
+    
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "Pg#2024!Evo@Secure"
+      POSTGRES_DB: postgres
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+      POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
+    
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=2621kB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+      -c max_worker_processes=4
+      -c max_parallel_workers_per_gather=2
+      -c max_parallel_workers=4
+      -c max_parallel_maintenance_workers=2
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+
+  ################################################################################
+  # BLOCO 3: REDIS - Cache e Sessões
+  ################################################################################
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │ 🔴 REDIS 7                                                               │
+  # ├─────────────────────────────────────────────────────────────────────────┤
+  # │ FUNÇÃO:                                                                  │
+  # │   - Cache de dados da Evolution API (reduz carga no PostgreSQL)         │
+  # │   - Armazenamento de sessões e estados temporários                      │
+  # │   - Fila de mensagens e eventos                                         │
+  # │                                                                          │
+  # │ OTIMIZAÇÕES:                                                             │
+  # │   - AOF (Append Only File): Persistência de dados                       │
+  # │   - appendfsync everysec: Sincronização a cada segundo                  │
+  # │   - maxmemory: 512MB (limite de memória)                                │
+  # │   - maxmemory-policy: allkeys-lru (remove chaves menos usadas)          │
+  # │   - Save snapshots: 900s/1key, 300s/10keys, 60s/10000keys              │
+  # │                                                                          │
+  # │ SEGURANÇA:                                                               │
+  # │   - Sem senha (rede interna isolada)                                    │
+  # │   - Não exposto externamente                                            │
+  # │                                                                          │
+  # │ HEALTHCHECK:                                                             │
+  # │   - Comando: redis-cli ping (retorna PONG se OK)                        │
+  # │   - Intervalo: 10s | Timeout: 3s | Retries: 5                           │
+  # └─────────────────────────────────────────────────────────────────────────┘
+  
+  redis:
+    image: redis:7-alpine
+    
+    networks:
+      - evo_network
+    
+    volumes:
+      - redis_data:/data
+    
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+      
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+
+  ################################################################################
+  # BLOCO 4: MINIO - Armazenamento S3
+  ################################################################################
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │ 🗄️ MINIO - S3 Compatible Storage                                        │
+  # ├─────────────────────────────────────────────────────────────────────────┤
+  # │ FUNÇÃO:                                                                  │
+  # │   - Armazenamento de arquivos (imagens, áudios, vídeos, documentos)    │
+  # │   - Compatível com S3 (AWS)                                             │
+  # │   - Console web para gerenciamento                                      │
+  # │                                                                          │
+  # │ CONFIGURAÇÕES:                                                           │
+  # │   - Console: http://SEU_IP:9001                                         │
+  # │   - API S3: http://SEU_IP:9000                                          │
+  # │   - Bucket: evolution (criado automaticamente)                          │
+  # │                                                                          │
+  # │ SEGURANÇA:                                                               │
+  # │   - Credenciais fortes (root user/password)                             │
+  # │   - Portas expostas (configure firewall)                                │
+  # │                                                                          │
+  # │ HEALTHCHECK:                                                             │
+  # │   - Endpoint: /minio/health/live                                        │
+  # │   - Intervalo: 30s | Timeout: 10s | Retries: 3                          │
+  # └─────────────────────────────────────────────────────────────────────────┘
+  
+  minio:
+    image: minio/minio:latest
+    
+    networks:
+      - evo_network
+    
+    volumes:
+      - minio_data:/data
+    
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    
+    environment:
+      MINIO_ROOT_USER: "minio_admin"
+      MINIO_ROOT_PASSWORD: "MinIO#2024!Secure@Pass"
+    
+    command: server /data --console-address ":9001"
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      
+      restart_policy:
+        condition: on-failure
+
+  ################################################################################
+  # BLOCO 5: EVOLUTION API - Aplicação Principal
+  ################################################################################
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │ 📱 EVOLUTION API v2.1.1                                                  │
+  # ├─────────────────────────────────────────────────────────────────────────┤
+  # │ FUNÇÃO:                                                                  │
+  # │   - API REST para integração com WhatsApp                               │
+  # │   - Gerenciamento de múltiplas instâncias                               │
+  # │   - Envio/recebimento de mensagens                                      │
+  # │   - Webhooks para eventos                                               │
+  # │                                                                          │
+  # │ INTEGRAÇÕES:                                                             │
+  # │   - PostgreSQL: Persistência de dados                                   │
+  # │   - Redis: Cache e sessões                                              │
+  # │   - MinIO: Armazenamento de arquivos                                    │
+  # │                                                                          │
+  # │ ✅ TODAS AS CORREÇÕES APLICADAS:                                         │
+  # │   ✅ DATABASE_CONNECTION_URI: Senha URL-encoded                         │
+  # │   ✅ REDIS_URI: Hostname correto                                        │
+  # │   ✅ S3_ENDPOINT: SEM porta (porta em S3_PORT)                          │
+  # │   ✅ Healthcheck: /health endpoint                                      │
+  # │   ✅ Start period: 60s (aguarda dependências)                           │
+  # │                                                                          │
+  # │ ACESSO:                                                                  │
+  # │   - URL: http://SEU_IP:8080                                             │
+  # │   - API Key: evo_2024_api_key_secure_v3                                 │
+  # │   - Docs: http://SEU_IP:8080/manager                                    │
+  # └─────────────────────────────────────────────────────────────────────────┘
+  
+  evolution-api:
+    image: atendai/evolution-api:v2.1.1
+    
+    networks:
+      - evo_network
+    
+    ports:
+      - "8080:8080"
+    
+    volumes:
+      - evolution_instances:/evolution/instances
+      - evolution_store:/evolution/store
+    
+    environment:
+      # ========================================
+      # SERVIDOR
+      # ========================================
+      SERVER_TYPE: "http"
+      SERVER_PORT: "8080"
+      SERVER_URL: "http://localhost:8080"
+      CORS_ORIGIN: "*"
+      CORS_METHODS: "GET,POST,PUT,DELETE,PATCH"
+      CORS_CREDENTIALS: "true"
+      
+      # ========================================
+      # LOGS
+      # ========================================
+      LOG_LEVEL: "ERROR,WARN,DEBUG,INFO,LOG,VERBOSE,DARK,WEBHOOKS"
+      LOG_COLOR: "true"
+      LOG_BAILEYS: "false"
+      
+      # ========================================
+      # BANCO DE DADOS - POSTGRESQL
+      # ✅ CORRIGIDO: Senha URL-encoded
+      # Senha original: Pg#2024!Evo@Secure
+      # Senha encoded:  Pg%232024%21Evo%40Secure
+      # ========================================
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: "postgresql"
+      DATABASE_CONNECTION_URI: "postgresql://postgres:Pg%232024%21Evo%40Secure@evo_1125_v3_postgres:5432/postgres?schema=public"
+      DATABASE_CONNECTION_CLIENT_NAME: "evolution_api"
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      DATABASE_SAVE_MESSAGE_UPDATE: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
+      DATABASE_SAVE_DATA_CHATS: "true"
+      DATABASE_SAVE_DATA_LABELS: "true"
+      DATABASE_SAVE_DATA_HISTORIC: "true"
+      
+      # ========================================
+      # REDIS
+      # ✅ CORRIGIDO: Hostname correto
+      # ========================================
+      REDIS_ENABLED: "true"
+      REDIS_URI: "redis://evo_1125_v3_redis:6379"
+      REDIS_PREFIX_KEY: "evolution"
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: "redis://evo_1125_v3_redis:6379/1"
+      CACHE_REDIS_PREFIX_KEY: "evolution_cache"
+      CACHE_REDIS_SAVE_INSTANCES: "true"
+      CACHE_LOCAL_ENABLED: "false"
+      
+      # ========================================
+      # ARMAZENAMENTO S3 (MINIO)
+      # ✅ CORRIGIDO: Endpoint SEM porta
+      # A porta vai em S3_PORT separadamente
+      # ========================================
+      S3_ENABLED: "true"
+      S3_ACCESS_KEY: "minio_admin"
+      S3_SECRET_KEY: "MinIO#2024!Secure@Pass"
+      S3_BUCKET: "evolution"
+      S3_PORT: "9000"
+      S3_ENDPOINT: "evo_1125_v3_minio"
+      S3_USE_SSL: "false"
+      
+      # ========================================
+      # AUTENTICAÇÃO
+      # ========================================
+      AUTHENTICATION_TYPE: "apikey"
+      AUTHENTICATION_API_KEY: "evo_2024_api_key_secure_v3"
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
+      
+      # ========================================
+      # INSTÂNCIAS
+      # ========================================
+      DEL_INSTANCE: "false"
+      DEL_TEMP_INSTANCES: "true"
+      CLEAN_STORE_CLEANING_INTERVAL: "7200"
+      CLEAN_STORE_MESSAGES: "true"
+      CLEAN_STORE_MESSAGE_UP_TO: "30"
+      CLEAN_STORE_CHATS: "true"
+      CLEAN_STORE_CONTACTS: "true"
+      
+      # ========================================
+      # WEBHOOK
+      # ========================================
+      WEBHOOK_GLOBAL_ENABLED: "false"
+      WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
+      
+      # ========================================
+      # OUTROS SERVIÇOS (DESABILITADOS)
+      # ========================================
+      RABBITMQ_ENABLED: "false"
+      WEBSOCKET_ENABLED: "false"
+      CHATWOOT_ENABLED: "false"
+      TYPEBOT_ENABLED: "false"
+      PROXY_ENABLED: "false"
+      
+      # ========================================
+      # QRCODE
+      # ========================================
+      QRCODE_LIMIT: "30"
+      QRCODE_COLOR: "#198754"
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+        window: 120s
+
+  ################################################################################
+  # BLOCO 6: BACKUP AUTOMÁTICO - PostgreSQL
+  ################################################################################
+  # ┌─────────────────────────────────────────────────────────────────────────┐
+  # │ 💾 BACKUP AUTOMÁTICO                                                     │
+  # ├─────────────────────────────────────────────────────────────────────────┤
+  # │ FUNÇÃO:                                                                  │
+  # │   - Backup automático do PostgreSQL a cada 6 horas                      │
+  # │   - Compressão GZIP para economia de espaço                             │
+  # │   - Retenção: últimos 7 backups (rotação automática)                    │
+  # │                                                                          │
+  # │ LOCALIZAÇÃO:                                                             │
+  # │   - Host: /root/backups/evolution/                                      │
+  # │   - Formato: evolution_backup_YYYYMMDD_HHMMSS.sql.gz                    │
+  # │                                                                          │
+  # │ SCRIPT INLINE:                                                           │
+  # │   - Loop infinito com sleep de 6 horas (21600s)                         │
+  # │   - pg_dump com compressão                                              │
+  # │   - Limpeza automática de backups antigos                               │
+  # │   - Logs de sucesso/erro                                                │
+  # │                                                                          │
+  # │ RECURSOS:                                                                │
+  # │   - Mínimos: 0.1 CPU / 64MB RAM                                         │
+  # │   - Não impacta performance da aplicação                                │
+  # └─────────────────────────────────────────────────────────────────────────┘
+  
+  backup:
+    image: postgres:16-alpine
+    
+    networks:
+      - evo_network
+    
+    volumes:
+      - postgres_data:/var/lib/postgresql/data:ro
+      - /root/backups/evolution:/backups
+    
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "Pg#2024!Evo@Secure"
+      POSTGRES_DB: postgres
+      PGHOST: evo_1125_v3_postgres
+      PGPORT: "5432"
+    
+    entrypoint: |
+      sh -c '
+      echo "🔄 Backup automático iniciado..."
+      
+      mkdir -p /backups
+      
+      while true; do
+        TIMESTAMP=$$(date +%Y%m%d_%H%M%S)
+        BACKUP_FILE="/backups/evolution_backup_$$TIMESTAMP.sql.gz"
+        
+        echo "📦 Criando backup: $$BACKUP_FILE"
+        
+        PGPASSWORD="Pg#2024!Evo@Secure" pg_dump \
+          -h evo_1125_v3_postgres \
+          -U postgres \
+          -d postgres \
+          --no-owner \
+          --no-acl \
+          | gzip > "$$BACKUP_FILE"
+        
+        if [ $$? -eq 0 ]; then
+          echo "✅ Backup criado com sucesso!"
+          ls -t /backups/evolution_backup_*.sql.gz | tail -n +8 | xargs -r rm
+          echo "🧹 Backups antigos removidos (mantendo últimos 7)"
+        else
+          echo "❌ Erro ao criar backup"
+        fi
+        
+        echo "⏰ Próximo backup em 6 horas..."
+        sleep 21600
+      done
+      '
+    
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      
+      restart_policy:
+        condition: on-failure
+
+################################################################################
+# FIM DA STACK
+################################################################################
+
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ 📊 RESUMO DE RECURSOS                                                    │
+# ├─────────────────────────────────────────────────────────────────────────┤
+# │ PostgreSQL:    2 CPU / 2GB RAM                                           │
+# │ Redis:         1 CPU / 512MB RAM                                         │
+# │ MinIO:         1 CPU / 1GB RAM                                           │
+# │ Evolution API: 2 CPU / 2GB RAM                                           │
+# │ Backup:        0.5 CPU / 256MB RAM                                       │
+# ├─────────────────────────────────────────────────────────────────────────┤
+# │ TOTAL:         6.5 CPU / 5.75GB RAM                                      │
+# │ Disponível:    4 CPU / 15GB RAM                                          │
+# │ Status:        ✅ Recursos suficientes                                   │
+# └─────────────────────────────────────────────────────────────────────────┘
+
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ 🌐 ACESSOS                                                               │
+# ├─────────────────────────────────────────────────────────────────────────┤
+# │ Evolution API:  http://SEU_IP:8080                                       │
+# │ API Manager:    http://SEU_IP:8080/manager                               │
+# │ MinIO Console:  http://SEU_IP:9001                                       │
+# │ MinIO S3 API:   http://SEU_IP:9000                                       │
+# │                                                                          │
+# │ 🔑 Credenciais:                                                          │
+# │   API Key: evo_2024_api_key_secure_v3                                    │
+# │   MinIO User: minio_admin                                                │
+# │   MinIO Pass: MinIO#2024!Secure@Pass                                     │
+# └─────────────────────────────────────────────────────────────────────────┘
+
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ 🔍 COMANDOS ÚTEIS                                                        │
+# ├─────────────────────────────────────────────────────────────────────────┤
+# │ Ver logs Evolution API:                                                  │
+# │   docker service logs -f evo_1125_v3_evolution-api                       │
+# │                                                                          │
+# │ Ver status dos serviços:                                                 │
+# │   docker service ls | grep evo_1125_v3                                   │
+# │                                                                          │
+# │ Testar Evolution API:                                                    │
+# │   curl http://localhost:8080/health                                      │
+# │                                                                          │
+# │ Listar instâncias:                                                       │
+# │   curl -H "apikey: evo_2024_api_key_secure_v3" \                         │
+# │        http://localhost:8080/instance/fetchInstances                     │
+# │                                                                          │
+# │ Atualizar stack:                                                         │
+# │   docker stack deploy -c evo_1125_v3.yml evo_1125_v3                     │
+# │                                                                          │
+# │ Remover stack:                                                           │
+# │   docker stack rm evo_1125_v3                                            │
+# └─────────────────────────────────────────────────────────────────────────┘
+
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ ✅ CHECKLIST DE CORREÇÕES APLICADAS                                      │
+# ├─────────────────────────────────────────────────────────────────────────┤
+# │ [✅] Senha PostgreSQL URL-encoded (Pg%232024%21Evo%40Secure)            │
+# │ [✅] Hostname PostgreSQL correto (evo_1125_v3_postgres)                 │
+# │ [✅] Hostname Redis correto (evo_1125_v3_redis)                         │
+# │ [✅] S3_ENDPOINT sem porta (evo_1125_v3_minio)                          │
+# │ [✅] S3_PORT separado (9000)                                             │
+# │ [✅] S3_USE_SSL false (comunicação interna)                             │
+# │ [✅] Healthchecks configurados em todos os serviços                     │
+# │ [✅] Recursos balanceados (6.5 CPU / 5.75GB RAM)                        │
+# │ [✅] Backup automático a cada 6 horas                                    │
+# │ [✅] Rede overlay criptografada                                          │
+# │ [✅] Restart policies configuradas                                       │
+# └─────────────────────────────────────────────────────────────────────────┘

@@ -1,0 +1,225 @@
+version: '3.8'
+
+# Redes externas para comunicação com a infra-stack e a rede pública do Traefik.
+networks:
+  agent_network:
+    external: true # Rede da infra-stack
+  traefik_public:
+    external: true # Rede do Traefik
+
+  # Rede interna para os serviços da stack n8n-app.
+  n8n_internal:
+    external: true # Usaremos a rede que você criou no Portainer no Passo 1
+
+# Volumes persistentes para dados do n8n.
+volumes:
+  n8n_data:
+
+# Anchor para configurações comuns a todos os serviços do n8n.
+x-n8n: &service-n8n
+  build:
+    context: /home/<root>/n8n-stack # Caminho completo para o diretório da stack na VPS
+    dockerfile: Dockerfile # Referencia o Dockerfile padrão do n8n
+  user: node
+  restart: unless-stopped
+  networks:
+    - n8n_internal # Rede interna desta stack
+    - agent_network # Para acessar Redis, Postgres, RabbitMQ (infra-stack)
+    - traefik_public # Para o Traefik rotear tráfego
+  environment:
+    # Variáveis de ambiente padrão do n8n
+    - N8N_DIAGNOSTICS_ENABLED=${N8N_DIAGNOSTICS_ENABLED}
+    - N8N_USER_FOLDER=/home/node/.n8n
+    - N8N_SECURE_COOKIE=${N8N_SECURE_COOKIE}
+    - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=${N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS}
+    - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY} # ESSENCIAL!
+    - N8N_HOST=${N8N_HOST}
+    - N8N_PROTOCOL=${N8N_PROTOCOL}
+    - WEBHOOK_URL=${WEBHOOK_URL}
+    - N8N_EDITOR_BASE_URL=${N8N_EDITOR_BASE_URL}
+    # Autenticação Básica para a UI do n8n
+    - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE}
+    - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
+    - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+    # Configuração de Fila (Queue Mode) - Requer Redis
+    - EXECUTIONS_MODE=${EXECUTIONS_MODE}
+    - QUEUE_BULL_REDIS_HOST=redis # Nome do serviço Redis na infra-stack
+    - QUEUE_BULL_REDIS_PORT=6379
+    - QUEUE_BULL_REDIS_PASSWORD=redis14kRRn03Xpt0) # Senha do Redis
+    - QUEUE_HEALTH_CHECK_ACTIVE=${QUEUE_HEALTH_CHECK_ACTIVE}
+    - N8N_QUEUE_BULL_GRACEFULSHUTDOWNTIMEOUT=${N8N_QUEUE_BULL_GRACEFULSHUTDOWNTIMEOUT}
+    - N8N_GRACEFUL_SHUTDOWN_TIMEOUT=${N8N_GRACEFUL_SHUTDOWN_TIMEOUT}
+    # Configuração de Banco de Dados - Requer PostgreSQL
+    - DB_TYPE=postgresdb
+    - DB_POSTGRESDB_HOST=postgres # Nome do serviço PostgreSQL na infra-stack
+    - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+    - DB_POSTGRESDB_USER=${POSTGRES_USER}
+    - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+    # Configuração de Task Runner
+    - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=${OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS}
+    - N8N_RUNNERS_AUTH_TOKEN=${N8N_RUNNERS_AUTH_TOKEN} # Token de autenticação para runners
+    # Variáveis para nós específicos (ex: Puppeteer)
+    - NODE_FUNCTION_ALLOW_EXTERNAL=ajv,ajv-formats,puppeteer
+    - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium # Caminho do Chromium dentro da imagem n8n
+
+services:
+  # n8n Main Service (UI, Scheduler)
+  n8n:
+    <<: *service-n8n # Usa as configurações comuns
+    hostname: n8n-main
+    command: n8n # Comando padrão para iniciar o n8n como main
+    volumes:
+      - n8n_data:/home/node/.n8n # Volume para dados persistentes
+    deploy:
+      mode: replicated
+      replicas: 1 # Apenas uma réplica para o serviço principal
+      placement:
+        constraints: [node.platform.os == linux]
+      resources:
+        limits:
+          cpus: '1.00'
+          memory: 2048M
+        reservations:
+          cpus: '0.50'
+          memory: 1024M
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5678/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    labels: # Labels para o Traefik rotear o tráfego para a UI principal e Webhooks
+      - "traefik.enable=true"
+      # Roteamento para a UI principal
+      - "traefik.http.routers.n8n-ui.rule=Host(`${N8N_HOST}`)"
+      - "traefik.http.routers.n8n-ui.entrypoints=websecure"
+      - "traefik.http.routers.n8n-ui.tls=true"
+      - "traefik.http.routers.n8n-ui.tls.certresolver=myresolver" # Use o nome do seu resolver do Traefik existente
+      - "traefik.http.services.n8n-ui.loadbalancer.server.port=5678"
+
+  # n8n Worker Service (processa execuções da fila)
+  n8n-worker:
+    <<: *service-n8n
+    hostname: n8n-worker
+    command: n8n worker # Comando para iniciar como worker
+    volumes:
+      - n8n_data:/home/node/.n8n # Compartilha o volume de dados
+    depends_on:
+      n8n:
+        condition: service_healthy # Depende do n8n principal estar saudável
+    deploy:
+      mode: replicated
+      replicas: 1 # Inicia com 1 réplica, mas será escalado pelo autoscaler
+      placement:
+        constraints: [node.platform.os == linux]
+      resources:
+        limits:
+          cpus: '0.75'
+          memory: 1024M
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5678/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # n8n Webhook Service (Dedicado a receber e processar webhooks)
+  n8n-webhook:
+    <<: *service-n8n
+    hostname: n8n-webhook
+    command: n8n webhook # Comando para iniciar como serviço de webhook
+    volumes:
+      - n8n_data:/home/node/.n8n # Compartilha o volume de dados
+    deploy:
+      mode: replicated
+      replicas: 1 # Pode ser escalado se o volume de webhooks for alto
+      placement:
+        constraints: [node.platform.os == linux]
+      resources:
+        limits:
+          cpus: '0.75'
+          memory: 1024M
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5678/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    labels: # Labels para o Traefik rotear especificamente os webhooks para este serviço
+      - "traefik.enable=true"
+      - "traefik.http.routers.n8n-webhook-entry.rule=Host(`${N8N_HOST}`) && PathPrefix(`/webhook/`)"
+      - "traefik.http.routers.n8n-webhook-entry.entrypoints=websecure"
+      - "traefik.http.routers.n8n-webhook-entry.tls=true"
+      - "traefik.http.routers.n8n-webhook-entry.tls.certresolver=myresolver" # Use o nome do seu resolver do Traefik existente
+      - "traefik.http.services.n8n-webhook-entry.loadbalancer.server.port=5678" # Porta interna do n8n
+
+  # Redis Monitor (Auxiliar para o Autoscaler)
+  redis-monitor:
+    build:
+      context: /home/<SEU_USUARIO_SSH>/n8n-stack # Caminho completo para o diretório da stack na VPS
+      dockerfile: monitor/monitor.Dockerfile
+    restart: unless-stopped
+    networks:
+      - n8n_internal
+      - agent_network # Para acessar o Redis da infra-stack
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=redis14kRRn03Xpt0)
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints: [node.platform.os == linux]
+      resources:
+        limits:
+          cpus: '0.10'
+          memory: 64M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+
+  # n8n Autoscaler (Gerencia o número de réplicas do n8n-worker)
+  n8n-autoscaler:
+    build:
+      context: /home/<SEU_USUARIO_SSH>/n8n-stack # Caminho completo para o diretório da stack na VPS
+      dockerfile: autoscaler/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock # NECESSÁRIO! Para interagir com o Docker Swarm API.
+    networks:
+      - n8n_internal
+      - agent_network # Para acessar o Redis da infra-stack
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=redis14kRRn03Xpt0)
+      - N8N_WORKER_SERVICE_NAME=n8n-stack_n8n-worker # Nome completo do serviço worker no Swarm
+      - COMPOSE_PROJECT_NAME=n8n-stack # Nome da stack no Portainer (IMPORTANTE!)
+      - MIN_REPLICAS=${MIN_REPLICAS}
+      - MAX_REPLICAS=${MAX_REPLICAS}
+      - SCALE_UP_QUEUE_THRESHOLD=${SCALE_UP_QUEUE_THRESHOLD}
+      - SCALE_DOWN_QUEUE_THRESHOLD=${SCALE_DOWN_QUEUE_THRESHOLD}
+      - POLLING_INTERVAL_SECONDS=${POLLING_INTERVAL_SECONDS}
+      - COOLDOWN_PERIOD_SECONDS=${COOLDOWN_PERIOD_SECONDS}
+    depends_on:
+      n8n-worker:
+        condition: service_started # Garante que o serviço worker exista antes de escalar
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints: [node.platform.os == linux]
+      resources:
+        limits:
+          cpus: '0.10'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
